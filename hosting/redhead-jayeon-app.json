@@ -1,0 +1,32 @@
+{
+  "_": [
+    "nature.redhead.kr — 모든 경로를 Cloud Run(jayeon-app)으로 넘긴다.",
+    "",
+    "appAssociation: NONE 이 이 파일의 존재 이유다. jayeon-app 의 app.json 이",
+    "nature.redhead.kr 에 대해 autoVerify 인텐트 필터를 갖고 있어서, 안드로이드가",
+    "/.well-known/assetlinks.json 을 직접 읽어 앱 링크를 검증한다. 기본값 AUTO 는",
+    "Firebase 가 그 경로를 '자기가 만든 빈 배열'로 가로채므로, 우리 파일이 Cloud Run 쪽에",
+    "있어도 요청이 거기까지 가지 않는다. 검증은 빈 배열을 받아 조용히 실패하고 — 에러가",
+    "아니라 그냥 링크가 브라우저로 열린다 — 직접 설치한 앱에서는 계속 열리기 때문에",
+    "테스트로는 드러나지 않는다.",
+    "",
+    "Cloud Run 쪽의 대응 블록은 jayeon-app/deploy/nginx.conf 의 location /.well-known/ 이다",
+    "(파일이 없으면 =404 로 없다고 말하게 해 배포 누락이 드러나게 해 둔 곳).",
+    "",
+    "Terraform 프로바이더에는 이 필드가 없다(7.44·8.0 모두 config 는 headers/redirects/rewrites",
+    "뿐). 그래서 Hosting 버전 관리를 통째로 여기로 옮겼다 — modules/firebase-hosting/main.tf 의",
+    "'콘텐츠 소유권의 경계' 주석 참고.",
+    "",
+    "이 배열은 주석 자리다. 스크립트가 밑줄 키를 걷어내고 보낸다."
+  ],
+  "appAssociation": "NONE",
+  "rewrites": [
+    {
+      "glob": "**",
+      "run": {
+        "serviceId": "jayeon-app",
+        "region": "asia-northeast3"
+      }
+    }
+  ]
+}

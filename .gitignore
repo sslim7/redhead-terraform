@@ -1,0 +1,45 @@
+# Local .terraform directories (.terraform.lock.hcl 은 커밋 대상)
+.terraform/
+
+# .tfstate files
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Plan files
+*.tfplan
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration files
+.terraformrc
+terraform.rc
+
+# GCP 서비스 계정 키 (ADC 사용을 원칙으로 하며 키 파일은 커밋하지 않는다)
+*-credentials.json
+service-account*.json
+
+# 자격증명 성격의 tfvars. 구조적 설정만 담은 variables.auto.tfvars 는 커밋한다.
+local.auto.tfvars
+
+# OS / IDE
+.DS_Store
+.idea/
+
+# terraform plan 산출물. 파일 이름을 무엇으로 주든 커밋하지 않는다 —
+# plan 파일에는 변수 값(시크릿 포함)이 그대로 직렬화돼 들어간다.
+tfplan
+tfplan-*
+
+# apply 로그
+apply.log
+
+# Claude Code 로컬 설정
+.claude/settings.local.json

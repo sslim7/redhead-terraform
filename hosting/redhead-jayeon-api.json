@@ -1,0 +1,21 @@
+{
+  "_": [
+    "nature-api.redhead.kr — 모든 경로를 Cloud Run(jayeon-was)으로 넘긴다.",
+    "",
+    "appAssociation 을 여기서도 NONE 으로 둔다. API 도메인에는 App Links 를 걸지 않지만,",
+    "Firebase 가 만들어 주는 빈 assetlinks.json 이 서빙되는 것 자체가 사실과 다른 응답이다.",
+    "웹 사이트가 없다고 말하는 편이 정확하다.",
+    "",
+    "이 배열은 주석 자리다. 스크립트가 밑줄 키를 걷어내고 보낸다."
+  ],
+  "appAssociation": "NONE",
+  "rewrites": [
+    {
+      "glob": "**",
+      "run": {
+        "serviceId": "jayeon-was",
+        "region": "asia-northeast3"
+      }
+    }
+  ]
+}

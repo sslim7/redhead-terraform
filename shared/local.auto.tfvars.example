@@ -1,0 +1,17 @@
+# 이 파일을 local.auto.tfvars 로 복사한 뒤 값을 채운다. (local.auto.tfvars 는 커밋하지 않는다)
+#   cp local.auto.tfvars.example local.auto.tfvars
+#
+# 구조적 설정은 variables.auto.tfvars 에 있고 그건 커밋한다. 여기 들어가는 값은 이 레포와
+# 수명이 다른 계정 성격의 값이다 — 결제 계정을 옮기면 바뀌고, 레포는 그대로다.
+
+# Cloud Billing 계정 ID. `gcloud billing accounts list` 의 ACCOUNT_ID 다.
+#
+# 비밀이 아니다(이 ID 만으로는 아무 것도 할 수 없다. 과금 권한은 IAM 이 통제한다).
+# 커밋된 tfvars 에 박지 않은 것은 비밀이라서가 아니라, 계정이 바뀌는 날 커밋 이력이 아니라
+# 이 파일 한 곳만 보면 되게 하려는 것이다.
+#
+# 이 계정의 값: 014919-076832-BF764E
+#
+# 비면 apply 가 값을 물어본다. 틀린 값을 넣으면 프로젝트는 만들어지지만 결제가 붙지 않아
+# API 활성화부터 실패한다.
+billing_account = "XXXXXX-XXXXXX-XXXXXX"
