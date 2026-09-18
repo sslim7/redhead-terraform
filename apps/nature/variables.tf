@@ -266,8 +266,76 @@ variable "call_ai" {
     # 기본 워크스페이스를 쓰면 빈 문자열이다. 빈 값이면 WAS 가 워크스페이스 헤더를
     # 붙이지 않아야 한다 — 빈 값을 그대로 헤더에 실으면 공급자가 400 을 돌려준다.
     workspace_id = optional(string, "")
+
+    # ── 원가 단가 ────────────────────────────────────────────────────────────
+    #
+    # 통화 한 건에 실제로 든 돈을 원화로 계산해 앱에 보여 주기 위한 값이다.
+    # 계산은 WAS 가 한다 — 단가가 바뀌어도 앱 배포가 필요 없어야 하기 때문이다.
+    #
+    # 🔴 **이 네 값이 asr_model / llm_model 바로 옆에 있는 것이 요점이다.** 모델을 바꾸면
+    # 단가도 함께 바꿔야 하는데, 다른 파일에 두면 모델만 갈고 단가는 옛 것으로 남는다.
+    # 그러면 새 공급자의 사용량에 옛 공급자 단가가 곱해진 금액이 **조용히** 뜬다 —
+    # 화면은 멀쩡하고 숫자만 틀리므로 알아챌 방법이 없다.
+    #
+    # 🔴 **기본값을 두지 않는다.** 그럴듯한 단가를 박아 두면 설정 실수가 「그럴듯하지만
+    # 틀린 금액」으로 나타나고, 그 화면은 진짜와 구분되지 않는다. 사용자는 이 숫자로
+    # 공급자 교체를 판단하므로, 틀린 금액을 보여 주느니 안 보여 주는 쪽이 낫다.
+    # WAS 는 **네 값이 전부 있을 때만** 계산하고, 하나라도 비면 비용을 아예 내보내지
+    # 않는다(앱은 비용 칸을 그리지 않는다). 일부만 채우면 「받아쓰기 83원」만 떠서
+    # 사용자가 그것을 한 건의 총액으로 읽는다.
+    #
+    # ⚠️ 단위가 요금표와 같아야 한다. 시간당·100만 토큰당으로 받는 이유는 공급자
+    # 요금표가 그 단위로 적혀 있어 **그대로 옮겨 적을 수 있기** 때문이다. 초당으로
+    # 환산해 적다가 0을 하나 빠뜨리면 금액이 10배 틀리는데 화면에서 알 수 없다.
+    #
+    # 현재 값의 출처와 검산은 jayeon-was 의 docs/llms.md 에 있다.
+    # 🔴 그중 asr_usd_per_hour 만은 **알리바바가 공개 문서에 올려 두지 않은 값**이다.
+    # 제3자 공시 단가와 자체 추정의 역산이 일치해 얻었다. **콘솔 청구서로 대조할 것** —
+    # 이 값이 틀리면 화면의 금액이 통째로 틀어진다.
+    asr_usd_per_hour = optional(number)
+
+    # ⚠️ 출력 단가에 구형 qwen-plus 값($1.2)을 쓰지 마라. qwen3.7-plus 는 $1.6 이고,
+    # 섞으면 약 12% 과소 계산된다 — 적게 나와서 의심하지 않게 되는 방향이라 더 나쁘다.
+    llm_usd_per_million_input_tokens  = optional(number)
+    llm_usd_per_million_output_tokens = optional(number)
+
+    # USD→KRW. 단가는 요금표 그대로 USD 로 적고 환산은 여기서 한 번만 한다 — 단가마다
+    # 원화로 미리 곱해 두면 환율이 바뀔 때 고칠 자리가 세 군데가 된다.
+    #
+    # ⚠️ 고정값이라 시간이 지나면 어긋난다. 실시간 조회를 붙이지 않은 이유는 100원 안팎의
+    # 표시에서 환율이 몇 % 움직여야 몇 원 차이이고, 그 정밀도를 위해 외부 의존을 하나 더
+    # 만들 값어치가 없기 때문이다. 크게 벌어지면 이 값을 갱신한다.
+    # 🔴 0 을 넣지 마라. 모든 금액이 0원이 되어 **공짜로 보인다.** WAS 는 환율 0 을
+    # 「설정 없음」으로 취급해 비용을 내보내지 않는다(단가 0 은 무료 구간으로 인정한다).
+    usd_to_krw = optional(number)
   })
   default = {}
+
+  # 🔴 네 값은 **전부 채우거나 전부 비우거나** 둘 중 하나다. 일부만 채운 상태는 WAS 에서
+  # 조용히 「비용 없음」이 되므로, 그 실수를 apply 시점에 잡는다.
+  validation {
+    condition = alltrue([
+      for v in [
+        var.call_ai.asr_usd_per_hour,
+        var.call_ai.llm_usd_per_million_input_tokens,
+        var.call_ai.llm_usd_per_million_output_tokens,
+        var.call_ai.usd_to_krw,
+      ] : v != null
+      ]) || alltrue([
+      for v in [
+        var.call_ai.asr_usd_per_hour,
+        var.call_ai.llm_usd_per_million_input_tokens,
+        var.call_ai.llm_usd_per_million_output_tokens,
+        var.call_ai.usd_to_krw,
+      ] : v == null
+    ])
+    error_message = "call_ai 의 단가 네 값(asr_usd_per_hour, llm_usd_per_million_input_tokens, llm_usd_per_million_output_tokens, usd_to_krw)은 전부 채우거나 전부 비워야 한다. 일부만 채우면 WAS 가 비용을 아예 내보내지 않아 화면에서 알아챌 수 없다."
+  }
+
+  validation {
+    condition     = var.call_ai.usd_to_krw == null || try(var.call_ai.usd_to_krw > 0, false)
+    error_message = "call_ai.usd_to_krw 는 0보다 커야 한다. 0이면 모든 금액이 0원이 되어 공짜로 보인다."
+  }
 }
 
 variable "call_jobs" {

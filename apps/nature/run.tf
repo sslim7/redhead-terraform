@@ -169,6 +169,24 @@ module "was" {
     # 400 을 돌려주므로, WAS 는 비어 있을 때 헤더를 아예 붙이지 않아야 한다.
     CALL_AI_WORKSPACE_ID = var.call_ai.workspace_id
 
+    # ── 원가 단가 ──────────────────────────────────────────────────────────
+    #
+    # 통화 한 건에 든 돈을 원화로 계산해 GET /calls/{id} 에 실어 보낸다. 🔴 계산을 서버가
+    # 하는 이유는 **단가가 바뀌어도 앱 배포가 필요 없게** 하기 위해서다. 앱에 단가를 두면
+    # 웹과 네이티브가 서로 다른 단가로 같은 통화를 다르게 표시하는 상태가 생긴다.
+    #
+    # 🔴 **네 값이 전부 있어야 WAS 가 계산한다.** null 을 빈 문자열로 보내면 WAS 가
+    # 「설정 없음」으로 보고 비용을 아예 내보내지 않으며, 앱은 비용 칸을 그리지 않는다.
+    # 일부만 채우는 실수는 §variables.tf 의 validation 이 apply 시점에 막는다.
+    #
+    # ⚠️ tostring() 이 필요한 이유 — env 맵은 문자열만 받는데 이 변수들은 number 다.
+    # 숫자를 그대로 넣으면 apply 가 타입 오류로 떨어진다(조용히 깨지지는 않는다).
+    CALL_ASR_USD_PER_HOUR                  = var.call_ai.asr_usd_per_hour == null ? "" : tostring(var.call_ai.asr_usd_per_hour)
+    CALL_LLM_USD_PER_MILLION_INPUT_TOKENS  = var.call_ai.llm_usd_per_million_input_tokens == null ? "" : tostring(var.call_ai.llm_usd_per_million_input_tokens)
+    CALL_LLM_USD_PER_MILLION_OUTPUT_TOKENS = var.call_ai.llm_usd_per_million_output_tokens == null ? "" : tostring(var.call_ai.llm_usd_per_million_output_tokens)
+    # 🔴 0 이면 모든 금액이 0원이 되어 공짜로 보인다. variables.tf 가 0 을 거부한다.
+    CALL_AI_USD_TO_KRW = var.call_ai.usd_to_krw == null ? "" : tostring(var.call_ai.usd_to_krw)
+
     # ── 🔴 이 둘이 비어 있으면 파이프라인이 통째로 죽는다 ───────────────
     #
     # WAS 는 기동할 때 이 두 값을 읽고, **둘 다 비어 있으면 tick 라우트를 아예 등록하지

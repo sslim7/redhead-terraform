@@ -91,6 +91,23 @@ call_ai = {
   base_url = "ws-f05u45izndv5glmp.ap-southeast-1.maas.aliyuncs.com"
   # 호스트에 이미 들어 있지만, 업로드 정책 발급 등 일부 호출이 따로 요구할 수 있어 남긴다.
   workspace_id = "ws-f05u45izndv5glmp"
+
+  # ── 원가 단가 (2026-09-18 조사, 근거는 jayeon-was 의 docs/llms.md) ──────────
+  # 🔴 위 asr_model / llm_model 을 바꾸면 여기도 반드시 함께 바꾼다(§variables.tf).
+  #
+  # 🔴 asr_usd_per_hour 만은 **알리바바가 공개 문서에 올려 두지 않은 값**이다. 제3자 공시
+  # 단가(초당 $0.000035)와 자체 추정의 역산이 정확히 일치해 얻었다. **콘솔 청구서로
+  # 대조할 것** — 비용의 85%가 받아쓰기라, 이 값이 틀리면 화면 금액이 통째로 틀어진다.
+  asr_usd_per_hour = 0.126
+
+  # qwen3.7-plus 국제 리전 공시 단가.
+  # ⚠️ 출력에 $1.2 를 쓰지 마라 — 그건 구형 qwen-plus non-thinking 값이고 약 12% 적게 나온다.
+  llm_usd_per_million_input_tokens  = 0.40
+  llm_usd_per_million_output_tokens = 1.60
+
+  # 실환율(조사 시점 1,385)보다 높게 잡은 값이다. 표시 금액이 실제보다 **적게** 나오는
+  # 방향을 피하려는 선택이다 — 비용을 과소로 보다가 나중에 청구서에서 놀라는 쪽이 나쁘다.
+  usd_to_krw = 1500
 }
 
 call_jobs = {
