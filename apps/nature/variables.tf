@@ -289,11 +289,43 @@ variable "call_jobs" {
     schedule  = optional(string, "* * * * *")
     time_zone = optional(string, "Etc/UTC")
     paused    = optional(bool, true)
+
+    # tick OIDC 토큰의 `aud` 클레임. Cloud Scheduler 가 이 값으로 토큰을 발급하고
+    # (§call-jobs.tf 의 oidc_token), WAS 가 CALL_TICK_AUDIENCE 로 같은 값을 검증한다
+    # (§run.tf). **둘이 갈라지면 매분 403 이다.**
+    #
+    # 🔴 **왜 `module.was.uri` 를 직접 쓰지 않고 변수로 받는가 — 순환 참조 때문이다.**
+    # 이 값은 module.was 의 입력(§run.tf 의 env 맵)으로 들어간다. 거기에 module.was.uri 를
+    # 적으면 module.was → 자기 자신이 되어 terraform 이 "Cycle" 로 plan 을 거부한다.
+    # 즉 이 하드코딩은 게으름이 아니라 그래프 제약이다. **되돌리지 마라** — 되돌리는 순간
+    # apply 가 아니라 plan 단계에서 깨지고, 그 에러 메시지만 봐서는 이유를 알 수 없다.
+    #
+    # 🔴 **경로를 붙이지 않는 서비스 URL 이다.** `https://jayeon-was-....run.app` 까지이며
+    # tick_path 는 붙이지 않는다. 경로가 붙은 audience 는 Cloud Run 이 토큰을 직접 검증하는
+    # 구성(allow_unauthenticated = false)에서 403 이 된다.
+    #
+    # ⚠️ Cloud Run 서비스를 지우고 다시 만들면 URL 이 바뀐다. 그때 이 값을 같이 바꾸지
+    # 않으면 스케줄러는 옛 URL 로 토큰을 발급하고 WAS 는 새 URL 을 기대해 매분 403 이다.
+    # 그 사고를 막는 것이 §call-jobs.tf 의 precondition 이다 — 값이 실제 서비스 URL 과
+    # 다르면 apply 가 그 자리에서 멈춘다.
+    audience = optional(string)
   })
   default = {}
 
   validation {
     condition     = startswith(var.call_jobs.tick_path, "/")
     error_message = "tick_path 는 슬래시로 시작해야 한다."
+  }
+
+  # 값이 있으면 https 스킴이고 경로가 없어야 한다.
+  # split("/", "https://host") == ["https:", "", "host"] 이므로 길이 3 이 "경로 없음" 이다.
+  # 끝에 슬래시가 하나만 더 붙어도 길이가 4 가 되어 여기서 걸린다.
+  validation {
+    condition = (
+      var.call_jobs.audience == null ||
+      (startswith(coalesce(var.call_jobs.audience, ""), "https://") &&
+      length(split("/", coalesce(var.call_jobs.audience, ""))) == 3)
+    )
+    error_message = "call_jobs.audience 는 https:// 로 시작하고 경로가 없는 서비스 URL 이어야 한다 (예: https://jayeon-was-xxxx-du.a.run.app). 끝 슬래시도 붙이지 마라."
   }
 }

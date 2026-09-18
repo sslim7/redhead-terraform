@@ -99,7 +99,20 @@ call_jobs = {
   tick_path       = "/internal/calls/tick"
   schedule        = "* * * * *"
   time_zone       = "Etc/UTC"
-  # 🔴 WAS 에 /internal/calls/tick 이 배포된 뒤에 false 로 바꾼다.
-  # 먼저 켜면 매분 404 가 쌓여 Cloud Scheduler 로그가 실패로 도배된다.
-  paused = true
+  # 2026-09-18 WAS v0.1.3 배포로 /internal/calls/tick 이 열린 것을 확인하고 켰다
+  # (인증 없는 호출이 404 가 아니라 401 로 떨어지는 것이 라우트가 있다는 증거다).
+  # 🔴 되돌려 끄면 통화가 업로드만 되고 영영 분석되지 않는다 — 앱에는 「분석 중」 으로
+  # 계속 남고 에러가 나지 않아 알람도 울리지 않는다.
+  paused = false
+
+  # jayeon-was 의 Cloud Run 서비스 URL(경로 없음). 스케줄러가 발급하는 OIDC 토큰의 `aud`
+  # 이자 WAS 가 검증하는 값이다.
+  #
+  # 🔴 여기 문자열로 적혀 있는 이유는 순환 참조다 — module.was.uri 를 §run.tf 의 env 에
+  # 넣으면 module.was 가 자기 출력을 입력으로 받게 되어 plan 이 Cycle 로 거부된다
+  # (§variables.tf 의 call_jobs.audience).
+  #
+  # ⚠️ Cloud Run 서비스를 지우고 다시 만들면 이 URL 이 바뀐다. 그때 이 줄을 같이 고쳐야
+  # 하며, 잊으면 §call-jobs.tf 의 precondition 이 apply 를 그 자리에서 멈춰 알려 준다.
+  audience = "https://jayeon-was-km2zqs27fa-du.a.run.app"
 }

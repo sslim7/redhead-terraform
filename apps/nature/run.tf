@@ -168,6 +168,41 @@ module "was" {
     # 기본 워크스페이스를 쓰면 빈 문자열이다. 🔴 빈 값을 그대로 헤더에 실으면 공급자가
     # 400 을 돌려주므로, WAS 는 비어 있을 때 헤더를 아예 붙이지 않아야 한다.
     CALL_AI_WORKSPACE_ID = var.call_ai.workspace_id
+
+    # ── 🔴 이 둘이 비어 있으면 파이프라인이 통째로 죽는다 ───────────────
+    #
+    # WAS 는 기동할 때 이 두 값을 읽고, **둘 다 비어 있으면 tick 라우트를 아예 등록하지
+    # 않는다**(internal/calls/handler.go). 그러고도 기동은 성공하고 /healthz 도 200 이라
+    # 리비전은 정상으로 뜬다. 남는 것은 로그 한 줄
+    # ("calls: CALL_TICK_CALLER 가 없다 — tick 라우트를 켜지 않는다") 뿐이고,
+    # 겉으로 보이는 증상은 **"녹음은 올라가는데 영원히 분석 대기"** 하나다. 에러율도
+    # 지연시간도 움직이지 않으니 알람이 울리지 않는다.
+    # ⚠️ 이건 가정이 아니다 — 실제로 이 상태로 한 번 배포됐고, 스케줄러가 paused 였던
+    # 덕에 404 조차 쌓이지 않아 더 오래 묻혀 있었다.
+    #
+    # 한쪽만 채우는 것도 안 된다. tick 핸들러의 인증 검사는 caller 나 audience 중
+    # 하나라도 비면 무조건 거부한다(internal/calls/tick.go). 즉 반쯤 설정된 상태는
+    # "라우트는 있는데 매분 403" 이 된다.
+
+    # 🔴 **`module.was.uri` 로 바꾸고 싶어도 바꿀 수 없다.** 이 맵은 module.was 의
+    # 입력이라 거기서 module.was 의 출력을 읽으면 순환 참조가 되고 plan 이 Cycle 로
+    # 거부된다. 그래서 값을 tfvars 로 받는다(§variables.tf 의 call_jobs.audience).
+    # 대신 실제 서비스 URL 과 어긋나면 §call-jobs.tf 의 precondition 이 apply 를 멈춘다 —
+    # 그 안전장치를 지우면 이 하드코딩이 조용한 고장으로 바뀐다.
+    CALL_TICK_AUDIENCE = var.call_jobs.audience
+
+    # 이쪽은 모듈 출력을 그대로 쓴다. 스케줄러가 토큰을 발급하는 계정과 WAS 가 허용하는
+    # 계정이 같은 출처에서 나오므로, tfvars 에서 scheduler_sa_id 를 바꿔도 양쪽이 함께
+    # 따라온다(§call-jobs.tf). 이 모듈은 module.was 에 의존하지 않아 사이클이 없다.
+    CALL_TICK_CALLER = module.call_scheduler_service_account.email
+
+    # 🔴 CALL_TICK_TOKEN 은 **운영에서 의도적으로 넣지 않는다.**
+    #
+    # 그건 로컬·테스트에서 OIDC 없이 tick 을 부르려고 만든 공유 비밀이다. 운영에 넣으면
+    # 그 문자열 하나를 아는 사람은 누구나 tick 을 때릴 수 있고(jayeon-was 는
+    # allow_unauthenticated = true 라 네트워크 경계가 막아 주지 않는다), 요청마다 외부
+    # ASR/LLM 비용이 그대로 나간다. 게다가 인증이 통과하니 로그상으로는 정상 tick 과
+    # 구분되지 않는다.
   }
 
   secret_env = {

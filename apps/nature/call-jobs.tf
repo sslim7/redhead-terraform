@@ -133,7 +133,50 @@ resource "google_cloud_scheduler_job" "call_tick" {
       # (allow_unauthenticated = false)에서는 audience 가 서비스 URL 과 정확히 같아야 하고,
       # 경로가 붙으면 403 이 된다. 지금은 WAS 가 검증하지만 같은 규칙을 지켜 둔다 —
       # 나중에 서비스를 닫는 날 이 한 줄 때문에 tick 이 죽는 것을 피하려는 것이다.
-      audience = module.was.uri
+      #
+      # 🔴 **`module.was.uri` 가 아니라 var 를 쓴다.** 토큰을 발급하는 쪽(여기)과
+      # 검증하는 쪽(WAS 의 CALL_TICK_AUDIENCE, §run.tf)은 반드시 **같은 출처**에서 값을
+      # 받아야 한다. WAS 쪽은 순환 참조 때문에 module.was.uri 를 쓸 수 없으므로
+      # (§variables.tf 의 call_jobs.audience), 여기서 module.was.uri 를 쓰면 두 값이
+      # 서로 다른 출처가 되어 갈라질 수 있다. 갈라진 결과는 매분 403 이고, 스케줄러 잡도
+      # WAS 도 "정상 동작 중" 으로 보인다.
+      audience = var.call_jobs.audience
+    }
+  }
+
+  # ── 🔴 이 설계의 안전장치 ────────────────────────────────────
+  #
+  # audience 가 tfvars 에 문자열로 박혀 있는 것은 순환 참조를 피하기 위한 타협이고
+  # (§variables.tf 의 call_jobs.audience), 타협의 대가는 "언젠가 실제 URL 과 어긋난다" 다.
+  # 어긋난 순간 스케줄러는 옛 URL 로 `aud` 를 채운 토큰을 발급하고 WAS 는 새 URL 을
+  # 기대하므로 매분 403 이다. 잡은 "실행됨" 으로 남고 서비스는 건강하며, 보이는 증상은
+  # 통화가 분석되지 않는 것뿐이다.
+  #
+  # 아래 precondition 이 그 상태를 **apply 시점에 큰 소리로** 잡는다. 여기서 module.was.uri
+  # 를 읽는 것은 사이클이 아니다 — 이 리소스는 module.was 의 입력이 아니라 그 출력을
+  # 소비하는 별개의 리소스다(위 uri 도 이미 같은 출력을 쓴다).
+  #
+  # ⚠️ 이 블록을 지우면 tfvars 의 오타 한 글자가 아무 경고 없이 배포된다.
+  lifecycle {
+    precondition {
+      condition     = var.call_jobs.audience == module.was.uri
+      error_message = <<-EOT
+        call_jobs.audience 가 jayeon-was 의 실제 서비스 URL 과 다르다.
+
+        이대로 apply 하면 Cloud Scheduler 는 이 값으로 OIDC 토큰을 발급하고 WAS 는
+        자기 URL 을 기대하므로, tick 이 매분 403 으로 죽는다. 잡도 서비스도 정상으로
+        보이고 증상은 "통화 분석이 진행되지 않는다" 하나뿐이다.
+
+        고치는 법:
+          1) 실제 URL 을 확인한다:
+             gcloud run services describe ${var.cloud_run.was_name} --project ${var.project_id} --region ${var.region} --format='value(status.url)'
+          2) apps/nature/variables.auto.tfvars 의 call_jobs.audience 를 그 값으로 바꾼다.
+             경로를 붙이지 않는 서비스 URL 이어야 한다(끝 슬래시도 없이).
+          3) 다시 plan/apply.
+
+        (module.was.uri 로 바꿔서 해결하려 들지 마라. WAS 쪽 CALL_TICK_AUDIENCE 가
+         module.was 의 입력이라 순환 참조가 되고 plan 이 Cycle 로 거부된다.)
+      EOT
     }
   }
 
