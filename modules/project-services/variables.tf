@@ -35,6 +35,15 @@ variable "services" {
     # 유일한 접근 통제선이고, 이 API 가 없으면 규칙 리소스 apply 가 403 으로 막힌다.
     # firestore.googleapis.com 과 별개 API 라서 따로 켜야 한다.
     "firebaserules.googleapis.com",
+    # 통화분석 작업 스윕(tick). Cloud Scheduler 가 1분마다 WAS 의 내부 엔드포인트를 두드린다
+    # (apps/nature/call-jobs.tf). Cloud Run 은 요청이 없으면 인스턴스를 내리므로 백그라운드
+    # 워커를 띄우는 대신 이 방식을 쓴다 — min_instance_count 를 1 로 올리지 않기 위해서다.
+    "cloudscheduler.googleapis.com",
+    # 🔴 GCS 서명 URL 발급에 필요하다. Cloud Run 의 ADC 에는 개인키가 없어서, 서명을
+    # 이 API 의 signBlob 으로 대신 받는다(apps/nature/iam.tf 의 self_token_creator).
+    # 대부분의 프로젝트에 기본으로 켜져 있어 빠뜨리기 쉽고, 빠지면 업로드가 아니라
+    # **URL 을 만드는 단계**에서 403 이 난다 — 버킷 IAM 은 멀쩡해서 원인이 그쪽으로 보인다.
+    "iamcredentials.googleapis.com",
   ]
 
   validation {

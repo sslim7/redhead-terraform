@@ -109,6 +109,35 @@ module "firestore" {
         { field_path = "createdAt", order = "DESCENDING" },
       ]
     },
+
+    # ── 통화분석 작업 스윕(callJobs) ─────────────────────────────────────────
+    #
+    # tick 이 1분마다 거는 쿼리는 하나다(§call-jobs.tf):
+    #   status == "pending" AND nextAttemptAt <= now ORDER BY nextAttemptAt ASC LIMIT n
+    #
+    # 🔴 **이건 단순 쿼리가 아니다.** 등가 조건(status)과 범위 조건(nextAttemptAt)이 서로
+    # 다른 필드에 걸리는 순간 Firestore 의 자동 단일 필드 인덱스로는 덮이지 않는다.
+    # 인덱스가 없으면 tick 이 매분 FAILED_PRECONDITION 으로 죽는데, WAS 기동·헬스체크·
+    # 나머지 API 는 전부 정상이라 **알람이 울리지 않는다.** 증상은 "녹음은 올라가는데
+    # 분석이 영원히 pending" 하나뿐이다.
+    #
+    # 🔴 필드 순서가 강제된다. Firestore 는 범위를 건 필드(nextAttemptAt)로 정렬할 것을
+    # 요구하고, 등가 조건 필드가 그 앞에 와야 한다. 순서를 바꾸면 그것은 다른 인덱스이고
+    # 위 쿼리는 그 인덱스를 타지 못한다.
+    #
+    # 방향은 ASCENDING 하나뿐이다. "가장 오래 기다린 작업부터" 가 이 쿼리의 전부이고,
+    # 감사 로그와 달리 정렬 방향이 요청 파라미터가 아니다. DESCENDING 벌을 넣지 마라 —
+    # 쓰지 않는 인덱스도 쓰기마다 갱신 비용을 낸다.
+    #
+    # ⚠️ WAS 가 이 쿼리에 필터를 하나라도 더하면(예: 공급자별 분리) 여기에 인덱스를
+    # 같은 호흡으로 더해야 한다. 등가 조건이 둘이 되는 순간 이 인덱스는 그 쿼리를 덮지 못한다.
+    {
+      collection = "callJobs"
+      fields = [
+        { field_path = "status", order = "ASCENDING" },
+        { field_path = "nextAttemptAt", order = "ASCENDING" },
+      ]
+    },
   ]
 
   # ── 단일 필드 collection group 인덱스 ─────────────────────────────────────

@@ -74,3 +74,27 @@ output "firestore_database_name" {
   description = "Firestore 데이터베이스 이름. 프로젝트당 (default) 는 하나뿐이고 이 앱이 그것을 쓴다"
   value       = module.firestore.database_name
 }
+
+# ── 통화분석 서버 파이프라인 ────────────────────────────────────────────────
+
+# WAS 의 CALL_AUDIO_BUCKET 과 같은 값이다. 콘솔에서 버킷을 찾거나
+# `gsutil ls gs://...` 로 업로드가 실제로 들어왔는지 확인할 때 쓴다.
+output "call_audio_bucket" {
+  description = "통화 녹음 원본 버킷 이름. 보관 기간이 지나면 원본만 사라지고 분석 결과는 Firestore 에 남는다"
+  value       = google_storage_bucket.call_audio.name
+}
+
+# 🔴 **WAS 가 이 값을 알아야 한다.** jayeon-was 는 allow_unauthenticated = true 라
+# Cloud Run IAM 이 /internal/calls/tick 을 막아 주지 않는다(§call-jobs.tf). tick 핸들러가
+# OIDC 토큰의 `email` 이 이 계정인지 직접 확인하는 것이 유일한 방어선이다.
+output "call_tick_caller" {
+  description = "tick 을 부르는 서비스 계정 이메일. WAS 가 OIDC 토큰의 email 클레임을 이 값과 대조해야 한다"
+  value       = module.call_scheduler_service_account.email
+}
+
+# OIDC audience 이자 Scheduler 가 실제로 두드리는 주소의 기준이다.
+# Hosting 도메인(nature-api.redhead.kr)이 아니라 Cloud Run URL 이어야 한다.
+output "call_tick_endpoint" {
+  description = "Cloud Scheduler 가 호출하는 tick 엔드포인트. audience 는 경로를 뺀 서비스 URL 이다"
+  value       = "${module.was.uri}${var.call_jobs.tick_path}"
+}

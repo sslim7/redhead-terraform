@@ -85,16 +85,30 @@ module "was" {
   container_port = var.cloud_run.container_port
 
   resources = {
-    cpu    = var.cloud_run.cpu
-    memory = var.cloud_run.memory
-    # 기본값(true)을 그대로 둔다 — **응답을 보낸 뒤에 도는 작업이 현재 없다.**
-    # 백그라운드 고루틴(지연 처리, 푸시 발송 같은 것)이 생기면 그때 false 로 내려야 한다.
-    # 그대로 두면 응답 직후 CPU 가 스로틀돼 그 작업이 중간에 끊기고, 증상은 "가끔 안 된다"
-    # 로만 나타난다.
+    cpu = var.cloud_run.cpu
+
+    # 🔴 app 과 **다른 값**을 쓴다(512Mi → 1Gi). 서버 통화분석이 30분 통화의 전사문 전체와
+    # 분석 JSON 을 메모리에서 조립한다. 512Mi 에서 넘치면 Cloud Run 은 에러를 돌려주는
+    # 대신 컨테이너를 죽이고, 그 인스턴스에 붙어 있던 다른 요청까지 함께 끊긴다.
+    # 자세한 논지는 §variables.tf 의 cloud_run.was_memory.
+    memory = var.cloud_run.was_memory
+
+    # 🔴 **통화분석이 들어와도 기본값(true)을 유지한다.** 이유는 처리 방식에 있다 —
+    # Cloud Scheduler 가 1분마다 깨우는 tick 요청 **안에서만** 일하고, 응답을 보낸 뒤에
+    # 도는 고루틴이 없다(§call-jobs.tf). 그 규칙을 지키는 한 false 로 내릴 이유가 없고,
+    # false 는 인스턴스 수명 내내 CPU 를 점유해 무료 한도를 빠르게 태운다.
+    #
+    # ⚠️ 뒤집어 말하면, tick 핸들러가 200 을 먼저 돌려주고 뒤에서 계속 일하도록 바뀌는
+    # 순간 이 값을 false 로 내려야 한다. 그때까지는 그 코드가 응답 직후 스로틀돼 중간에
+    # 끊기고, 증상은 "가끔 분석이 안 끝나 있다" 뿐이다.
     cpu_idle = true
   }
 
   scaling = {
+    # 🔴 **0 을 유지한다.** tick 이 1분마다 오므로 인스턴스는 사실상 계속 따뜻하고
+    # (콜드스타트를 사용자 요청이 아니라 tick 이 먹는다), cpu_idle = true 라 유휴
+    # 인스턴스에는 과금이 없다. 1 로 올리면 1 vCPU 를 월 730시간 상시 점유해 무료 한도를
+    # 크게 넘는데, tick 구조에서는 그 대가로 얻는 것이 없다.
     min_instance_count = 0
     max_instance_count = var.cloud_run.max_instance_count
     concurrency        = 80
@@ -125,6 +139,35 @@ module "was" {
     # 에뮬레이터에 붙으려 하고, 모든 데이터 API 가 연결 실패로 죽는다. 빈 문자열로 두는 것도
     # 안전하지 않다(SDK 구현에 따라 "설정됨" 으로 볼 수 있다). 아예 넣지 않는 것이 유일하게
     # 안전한 상태다.
+
+    # ── 통화분석 서버 파이프라인 ───────────────────────────────────────────
+    #
+    # 🔴 버킷 이름을 문자열로 박지 않고 리소스에서 읽는다. 그래야 버킷을 다시 만들거나
+    # 이름 규칙을 바꾸는 날 WAS 가 따라온다 — 문자열로 두면 존재하지 않는 버킷에 계속
+    # 업로드를 시도하고, 에러는 서명 URL 을 받은 **클라이언트 쪽**에서만 보인다.
+    CALL_AUDIO_BUCKET = google_storage_bucket.call_audio.name
+
+    # 🔴 버킷의 lifecycle 규칙과 **같은 변수**에서 나온다(§call-audio.tf). 앱이 화면에
+    # 보여 주는 보관 기간과 버킷이 실제로 지키는 기간이 갈라지지 않게 하는 유일한 장치다.
+    # 여기에 숫자를 직접 적지 마라 — 어긋나도 apply 는 성공하고, 1년 뒤에야 드러난다.
+    CALL_AUDIO_RETENTION_DAYS = tostring(var.call_audio.retention_days)
+
+    # 🔴 공급자와 모델을 나눠 둔 것이 교체 가능성의 이음매다. 1차는 Alibaba Model Studio
+    # (Singapore)지만 Vertex AI/Bedrock 으로 옮길 때 고칠 곳이 이 값들과 WAS 의 어댑터로
+    # 한정되게 한다. 모델 ID 를 코드에 박으면 그 약속이 깨진다.
+    CALL_ASR_PROVIDER = var.call_ai.asr_provider
+    CALL_ASR_MODEL    = var.call_ai.asr_model
+    CALL_LLM_PROVIDER = var.call_ai.llm_provider
+    CALL_LLM_MODEL    = var.call_ai.llm_model
+
+    # 🔴 엔드포인트와 API 키는 **리전 쌍으로 묶여 있다.** 싱가포르 키로 중국 본토
+    # 엔드포인트를 부르면 401 이고 그 반대도 마찬가지다. 에러가 "인증 실패" 로만 나와
+    # 키를 다시 발급받게 만드는데 실제로는 이 URL 이 틀린 것이다(§variables.tf 의 call_ai).
+    CALL_AI_BASE_URL = var.call_ai.base_url
+
+    # 기본 워크스페이스를 쓰면 빈 문자열이다. 🔴 빈 값을 그대로 헤더에 실으면 공급자가
+    # 400 을 돌려주므로, WAS 는 비어 있을 때 헤더를 아예 붙이지 않아야 한다.
+    CALL_AI_WORKSPACE_ID = var.call_ai.workspace_id
   }
 
   secret_env = {
@@ -134,6 +177,17 @@ module "was" {
     # ⚠️ 이 줄을 지우면 WAS 는 기동하지만 어드민 라우트를 등록하지 않는다. 어드민 API 가
     # 전부 404 이고 기동·헬스체크는 정상이라 알람이 울리지 않는다.
     ADMIN_JWT_SECRET = { secret = module.secrets.secret_ids["ADMIN_JWT_SECRET"] }
+
+    # 통화분석 공급자 API 키.
+    #
+    # 🔴 위 둘과 **실패 모양이 다르다.** JWT 키가 없으면 WAS 는 기동을 거부하지만, 이 키가
+    # placeholder(REPLACE_ME) 인 채로 떠도 **기동도 헬스체크도 전부 정상**이다. 깨지는 것은
+    # 공급자 호출뿐이고 증상은 "녹음은 올라가는데 분석이 계속 실패" 하나다.
+    # 실제 키 업로드 절차와 placeholder 함정은 §secrets.tf 에 있다.
+    #
+    # ⚠️ version = "latest" 여도 **이미 뜬 인스턴스는 기동 시점의 값을 들고 있다.**
+    # 키를 올린 뒤 리비전을 새로 띄우지 않으면 계속 REPLACE_ME 를 쓴다.
+    CALL_AI_API_KEY = { secret = module.secrets.secret_ids["CALL_AI_API_KEY"] }
   }
 
   # ── 🔴 헬스체크 경로가 둘이고, 바꿔 쓰면 안 된다 ──────────────────────────
@@ -173,5 +227,12 @@ module "was" {
   # secretAccessor 바인딩보다 먼저 리비전이 만들어질 수 있고, 그러면 시크릿을 못 읽어
   # 기동에 실패한다(JWT_SECRET 이 없으면 WAS 는 기동을 거부한다).
   # Firestore 및 런타임 IAM도 기동 전에 준비한다. probe를 켠 리비전은 DB 접근을 확인한다.
-  depends_on = [module.secrets, module.firestore, module.was_service_account]
+  # 통화 녹음 버킷의 IAM 바인딩도 기동 전에 준비한다. 없어도 기동은 하지만, 첫 업로드
+  # 요청이 IAM 전파 전에 들어오면 서명 URL 발급이 실패한다.
+  depends_on = [
+    module.secrets,
+    module.firestore,
+    module.was_service_account,
+    google_storage_bucket_iam_member.was_call_audio,
+  ]
 }

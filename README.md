@@ -9,7 +9,7 @@
 | 경로 | 관리 대상 | state (`gs://redhead-kr-tfstate`) |
 |---|---|---|
 | `shared/` | 프로젝트, API, state 버킷, Firebase 등록, DNS 존, 메일(PurelyMail) DNS, Artifact Registry | `shared` |
-| `apps/nature/` | Cloud Run, 서비스 계정·권한, JWT 시크릿, Firestore·인덱스·규칙, Hosting 사이트·커스텀 도메인, 앱 DNS, Cloud Build 트리거 | `apps/jayeon` |
+| `apps/nature/` | Cloud Run, 서비스 계정·권한, 시크릿, Firestore·인덱스·규칙, Hosting 사이트·커스텀 도메인, 앱 DNS, Cloud Build 트리거, 통화 녹음 버킷, 통화분석 tick(Cloud Scheduler) | `apps/jayeon` |
 | `modules/` | 재사용 Terraform 모듈 | — |
 | `hosting/`, `scripts/hosting-release.sh` | Hosting rewrite 설정과 릴리스 (Terraform 밖) | — |
 
@@ -35,6 +35,8 @@
 
 - WAS `/healthz` startup probe 활성화: `apps/nature/variables.auto.tfvars`에서
   `enable_was_startup_probe = true`로 바꾸고 plan 검토 후 apply한다. 현재는 기본 TCP probe다.
+- 통화분석 서버 파이프라인 인프라는 코드만 작성된 상태다. apply·키 업로드·tick 활성화는
+  아래 「통화분석 서버 파이프라인」 절차를 따른다.
 - `sslim7/erd`는 저장소 연결만 되어 있고 트리거·배포 구성은 없다.
 - 구 `jayeon*` 도메인 제거는 구 클라이언트 사용 여부 확인 후 별도 작업으로 한다.
 
@@ -48,6 +50,9 @@
 | 배포 트리거 | release 브랜치 커밋에 `v*` 태그 push (트리거 위치 `global`, 빌드 `_REGION`은 서울) |
 | 웹 빌드 변수 | `EXPO_PUBLIC_API_URL`, `EXPO_PUBLIC_ENV`, `EXPO_PUBLIC_WEBVIEW_URL` |
 | WAS 런타임 | `GOOGLE_CLOUD_PROJECT`, `CORS_ALLOWED_ORIGINS`, `JWT_SECRET`, `ADMIN_JWT_SECRET` |
+| WAS 통화분석 런타임 | `CALL_AUDIO_BUCKET`, `CALL_AUDIO_RETENTION_DAYS`, `CALL_ASR_PROVIDER`, `CALL_ASR_MODEL`, `CALL_LLM_PROVIDER`, `CALL_LLM_MODEL`, `CALL_AI_BASE_URL`, `CALL_AI_WORKSPACE_ID`, 시크릿 `CALL_AI_API_KEY` |
+| 통화 녹음 저장소 | GCS `redhead-kr-call-audio` (서울, 366일 후 원본 자동 삭제) |
+| 통화분석 스윕 | Cloud Scheduler `jayeon-call-tick` → `POST {Cloud Run URL}/internal/calls/tick` (OIDC, 1분) |
 | 헬스 체크 | 외부 `/health`, 컨테이너 startup probe `/healthz` |
 | 데이터 | Firestore `(default)`, 서버 SA만 접근, 클라이언트 규칙은 전면 거부 |
 
@@ -57,6 +62,70 @@
 - `EXPO_PUBLIC_*`는 빌드 시 번들에 들어가므로 변경 시 이미지를 다시 빌드한다.
 - Cloud Build 트리거 위치(`cicd.location = "global"`)와 Cloud Run 리전을 같은 값으로 묶지 않는다.
   1세대 연결이 `global`이라 서울 리전 트리거는 `Repository mapping does not exist`로 실패한다.
+
+## 통화분석 서버 파이프라인
+
+통화분석을 기기에서 서버로 옮긴 구성이다. 앱이 서명 URL(또는 resumable 세션)로 녹음을
+GCS에 **직접** 올리고, Cloud Scheduler가 1분마다 WAS를 깨워 밀린 작업을 처리한다.
+Cloud Run은 요청이 없으면 인스턴스를 내리므로 상주 워커 대신 tick 방식을 쓴다
+(`min_instance_count = 0`, `cpu_idle = true`를 유지하기 위해서다).
+
+**보관 기간은 1년(366일)이고, 사라지는 것은 원본 오디오뿐이다.** 전사문·분석 결과·할 일은
+Firestore에 남는다. 만료된 통화는 요약이 그대로 보이고 오디오 재생만 404가 된다.
+재분석(모델 교체 후 과거 통화 재처리)은 보관 기간 안에서만 가능하다.
+
+### apply 순서
+
+`terraform apply`가 먼저고 WAS 배포가 나중이다. 뒤집으면 WAS가 존재하지 않는 버킷·시크릿을
+참조한다.
+
+1. `shared/` apply — `cloudscheduler`, `iamcredentials` API를 켠다. 앱 루트는 API를 켜지
+   않으므로(§`modules/firestore/main.tf` 상단) 이 순서가 유일한 보장이다.
+2. `apps/nature/` apply — 버킷·IAM·시크릿 껍데기·Firestore 인덱스·tick 잡을 만들고
+   Cloud Run 리비전을 갱신한다. 이 시점의 `CALL_AI_API_KEY`는 `REPLACE_ME`이고
+   tick 잡은 `paused = true`다.
+3. 실제 API 키 업로드 — 값을 셸 히스토리에 남기지 않도록 파일이나 stdin으로 넣는다.
+
+   ```bash
+   gcloud secrets versions add CALL_AI_API_KEY --project=redhead-kr --data-file=-
+   ```
+
+   올린 직후 `variables.auto.tfvars`가 아니라 `apps/nature/secrets.tf`의 해당 항목을
+   `placeholder = false`로 바꾸고 state에서도 뺀다. 그러지 않으면 어떤 이유로든 그 버전이
+   재생성될 때 `REPLACE_ME`가 다시 `latest`가 되어 분석이 조용히 죽는다.
+
+   ```bash
+   terraform -chdir=apps/nature state rm \
+     'module.secrets.google_secret_manager_secret_version.manual["CALL_AI_API_KEY"]'
+   ```
+
+4. WAS 배포 (`v*` 태그 push) — 업로드 URL 발급, tick 핸들러, OIDC 검증이 들어간 이미지.
+   시크릿은 `latest`를 보지만 **이미 뜬 인스턴스는 기동 시점의 값을 들고 있다.** 키를
+   올린 뒤에는 반드시 새 리비전이 떠야 한다.
+5. tick 활성화 — `apps/nature/variables.auto.tfvars`의 `call_jobs.paused = false`로 바꾸고
+   plan 검토 후 apply. 배포 전에 켜면 매분 404가 쌓여 Scheduler 로그가 실패로 도배된다.
+
+### WAS가 반드시 구현해야 하는 것
+
+Terraform이 강제하지 못하는 부분이다.
+
+- **tick 엔드포인트의 OIDC 검증.** `jayeon-was`는 Hosting rewrite 때문에
+  `allow_unauthenticated = true`이고, 그래서 **Cloud Run IAM이 `/internal/calls/tick`을
+  막아 주지 않는다.** 핸들러가 Authorization 헤더의 ID 토큰을 직접 검증해야 한다 —
+  구글 서명, `aud`가 Cloud Run 서비스 URL, `email`이 `terraform output call_tick_caller`,
+  `email_verified`가 true. 빼먹으면 누구나 `curl` 한 줄로 tick을 때리고 그때마다 외부
+  API 비용이 나간다. 인증 없이도 200이 돌아오므로 테스트에서는 아무 문제가 없어 보인다.
+- **요청 안에서 끝내기.** `cpu_idle = true`라 응답 직후 CPU가 스로틀된다. 200을 먼저
+  돌려주고 뒤에서 일하면 그 작업이 중간에 끊기고 에러 로그도 남지 않는다.
+- **한 tick의 상한.** Cloud Run 타임아웃(60s)과 Scheduler `attempt_deadline`이 같은 값이다.
+  한 번에 처리할 작업 수를 스스로 제한하고 남은 것은 다음 tick이 가져간다.
+- **중복 처리 방지.** tick이 1분을 넘기면 다음 tick과 겹치고, `concurrency 80` /
+  `max_instances 3`이라 같은 작업을 두 인스턴스가 집을 수 있다. `callJobs` 문서의
+  `status`·`nextAttemptAt`를 트랜잭션으로 바꿔 잡아야 한다. 작업 단위 재시도도 WAS의
+  몫이다 — Scheduler는 `retry_count = 0`이다.
+- **스윕 쿼리 모양 고정.** 인덱스는 `callJobs (status ASC, nextAttemptAt ASC)` 하나다
+  (§`apps/nature/firestore.tf`). 등가 필터를 하나라도 더하면 이 인덱스로 덮이지 않고,
+  그 쿼리만 `FAILED_PRECONDITION` 500이 되는데 기동·헬스체크는 정상이라 알람이 없다.
 
 ## Hosting rewrite
 

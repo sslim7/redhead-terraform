@@ -114,9 +114,18 @@ variable "cloud_run" {
     was_name = optional(string, "jayeon-was")
     # 🔴 최초 apply 용 부트스트랩 이미지. 실제 이미지는 Cloud Build 가 밀어 넣고
     # 모듈의 lifecycle.ignore_changes 가 재적용을 막는다(§run.tf).
-    bootstrap_image    = optional(string, "us-docker.pkg.dev/cloudrun/container/hello")
-    cpu                = optional(string, "1")
-    memory             = optional(string, "512Mi")
+    bootstrap_image = optional(string, "us-docker.pkg.dev/cloudrun/container/hello")
+    cpu             = optional(string, "1")
+    # jayeon-app(nginx 정적 서빙)의 메모리. 정적 파일을 내주는 데 더 필요한 것이 없다.
+    memory = optional(string, "512Mi")
+    # 🔴 jayeon-was 만 따로 받는다. **공통 memory 를 올리지 마라** — 그러면 nginx 컨테이너까지
+    # 같이 올라가 아무 이득 없이 요청당 메모리 과금만 두 배가 된다.
+    #
+    # 1Gi 로 올리는 이유: 서버 통화분석이 30분 통화의 전사문 전체와 분석 JSON 을 메모리에서
+    # 조립한다(§run.tf 의 CALL_* 환경변수). 512Mi 에서 넘치면 Cloud Run 은 에러가 아니라
+    # **컨테이너를 죽인다** — 클라이언트는 503 을 받고 로그에는 "Memory limit exceeded" 한 줄만
+    # 남아, 원인이 코드 버그처럼 보인다. 그리고 그 리비전에 붙어 있던 다른 요청까지 함께 끊긴다.
+    was_memory         = optional(string, "1Gi")
     timeout            = optional(string, "60s")
     max_instance_count = optional(number, 3)
     # 컨테이너가 리스닝하는 포트. 두 서비스 모두 8080 이다
@@ -184,4 +193,107 @@ variable "legacy_domains" {
   description = "기존 클라이언트 호환 도메인. 새 도메인 검증 및 별도 정리 승인 전 유지한다"
   type        = object({ app = string, api = string })
   default     = { app = "jayeon.redhead.kr", api = "jayeon-api.redhead.kr" }
+}
+
+# ── 통화분석 서버 파이프라인 ────────────────────────────────────────────────
+
+variable "call_audio" {
+  description = <<-EOT
+    통화 녹음 원본 버킷 설정(§call-audio.tf).
+
+    🔴 retention_days 는 **버킷의 lifecycle 규칙과 WAS 의 CALL_AUDIO_RETENTION_DAYS 가
+    함께 읽는 단일 출처**다. 여기만 고치면 둘이 같이 움직인다. 따로 적으면 앱이 약속하는
+    보관 기간과 버킷이 실제로 지키는 기간이 갈라지고, 그 불일치는 1년 뒤에 드러난다.
+
+    🔴 cors_origins 에 없는 오리진은 **에러를 내지 않는다.** GCS 는 CORS 헤더를 조용히
+    안 붙일 뿐이고, 막는 것은 브라우저다. curl 로는 재현되지 않으며 증상은 웹뷰 콘솔의
+    CORS 에러 하나뿐이다. 스킴을 포함한 정확한 오리진이어야 하고 끝에 슬래시를 붙이면
+    매칭되지 않는다. 포트가 다르면 다른 오리진이다.
+  EOT
+  type = object({
+    # null 이면 "{project_id}-call-audio" 로 파생시킨다. 이름은 전역 유일값이다.
+    bucket_name = optional(string)
+    # 🔴 사용자 확정값: 1년(윤년 포함 366일). 이 값을 줄이면 그만큼 과거 통화의 재분석이
+    # 불가능해진다 — 되돌릴 수 없다.
+    retention_days = optional(number, 366)
+    cors_origins = optional(list(string), [
+      "https://nature.redhead.kr",
+      # 로컬 개발. 🔴 운영 버킷에 붙는 설정이므로 이 줄은 개발 머신의 브라우저가 운영
+      # 녹음을 올릴 수 있다는 뜻이다. 서명 URL 없이는 아무것도 못 하므로 실질 위험은
+      # 서명 URL 발급 권한에 있고, 그건 WAS 의 인증이 지킨다.
+      "http://localhost:3103",
+    ])
+  })
+  default = {}
+
+  validation {
+    condition     = var.call_audio.retention_days >= 1
+    error_message = "retention_days 는 1 이상이어야 한다."
+  }
+
+  validation {
+    condition     = alltrue([for o in var.call_audio.cors_origins : can(regex("^https?://", o)) && !endswith(o, "/")])
+    error_message = "cors_origins 는 스킴(http:// 또는 https://)을 포함하고 끝에 슬래시가 없어야 한다."
+  }
+}
+
+variable "call_ai" {
+  description = <<-EOT
+    통화분석 공급자 설정. 값은 전부 평문 환경변수로 WAS 에 간다(키는 Secret Manager 다).
+
+    🔴 **1차 공급자는 Alibaba Model Studio 지만 교체 가능하게 설계 중이다.** provider 와
+    model 을 나눠 둔 것이 그 이음매다 — Vertex AI/Bedrock 으로 옮길 때 고칠 곳은
+    이 값들과 WAS 의 어댑터이고, 인프라(버킷·시크릿·tick)는 그대로 쓴다.
+
+    🔴 ASR 과 LLM 을 따로 두는 이유: 둘은 같은 공급자일 이유가 없다. 전사만 먼저 다른
+    공급자로 옮기는 상황이 실제로 생긴다(음질·언어·가격이 모델마다 다르다).
+  EOT
+  type = object({
+    asr_provider = optional(string, "alibaba")
+    asr_model    = optional(string, "qwen-audio-3.0-asr-flash-filetrans")
+    llm_provider = optional(string, "alibaba")
+    llm_model    = optional(string, "qwen3.7-plus")
+
+    # 🔴 **싱가포르(국제) 엔드포인트다.** 중국 본토 엔드포인트(dashscope.aliyuncs.com)와
+    # API 키가 서로 호환되지 않는다 — 싱가포르에서 발급한 키로 본토를 부르면 401 이고
+    # 그 반대도 마찬가지다. 에러가 "인증 실패" 로만 나와 키가 잘못된 줄 알고 다시 발급받게
+    # 만드는데, 실제로는 이 URL 이 틀린 것이다.
+    #
+    # ⚠️ compatible-mode 는 OpenAI 호환 경로다. WAS 가 DashScope 네이티브 SDK 를 쓰면
+    # 경로가 /api/v1 이어야 한다. 이 값과 WAS 의 클라이언트 모드가 반드시 짝이어야 한다.
+    base_url = optional(string, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1")
+
+    # 기본 워크스페이스를 쓰면 빈 문자열이다. 빈 값이면 WAS 가 워크스페이스 헤더를
+    # 붙이지 않아야 한다 — 빈 값을 그대로 헤더에 실으면 공급자가 400 을 돌려준다.
+    workspace_id = optional(string, "")
+  })
+  default = {}
+}
+
+variable "call_jobs" {
+  description = <<-EOT
+    통화분석 작업 스윕(tick) 설정(§call-jobs.tf).
+
+    🔴 **paused 기본값은 true 이고, 그 이유가 순서다.** WAS 에 tick_path 가 배포되기 전에
+    켜면 매분 404 가 쌓이고 Cloud Scheduler 로그가 실패로 도배된다.
+    순서: paused = true 로 apply → WAS 배포 → false 로 바꿔 다시 apply.
+    (enable_was_startup_probe 와 같은 관례다.)
+  EOT
+  type = object({
+    # account_id 규칙: 소문자로 시작하는 6~30자 소문자/숫자/하이픈.
+    scheduler_sa_id = optional(string, "jayeon-call-tick")
+    job_name        = optional(string, "jayeon-call-tick")
+    # 🔴 이 경로를 바꾸면 WAS 의 라우트도 같이 바꿔야 한다. 어긋나면 매분 404 이고
+    # 서비스의 다른 부분은 전부 정상이라 알람이 울리지 않는다.
+    tick_path = optional(string, "/internal/calls/tick")
+    schedule  = optional(string, "* * * * *")
+    time_zone = optional(string, "Etc/UTC")
+    paused    = optional(bool, true)
+  })
+  default = {}
+
+  validation {
+    condition     = startswith(var.call_jobs.tick_path, "/")
+    error_message = "tick_path 는 슬래시로 시작해야 한다."
+  }
 }

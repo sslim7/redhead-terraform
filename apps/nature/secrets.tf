@@ -63,6 +63,38 @@ module "secrets" {
     # 어드민 화면은 멀쩡히 뜨고 로그인 버튼만 404 를 받는다. 이 모듈이 값을 만들어 넣으므로
     # 그 상태가 되지는 않지만, 연결을 빼면(run.tf 의 secret_env 에서 지우면) 그렇게 된다.
     ADMIN_JWT_SECRET = { random_length = 32 }
+
+    # ── 통화분석 공급자 API 키 (Alibaba Model Studio, Singapore) ─────────────
+    #
+    # 🔴 **위 둘과 달리 Terraform 이 값을 만들지 않는다.** 이건 외부 콘솔에서 발급받는
+    # 키라서 Terraform 이 만들어 낼 수 있는 값이 아니다. manual = true 가 그 뜻이고,
+    # 모듈은 부트스트랩용 "REPLACE_ME" 버전 하나만 넣은 뒤 값 변경을 추적하지 않는다.
+    #
+    # placeholder 가 필요한 이유 — Cloud Run 은 배포 시점에 시크릿 버전이 최소 1개
+    # 있어야 한다. 버전이 없으면 리비전이 Ready 가 되지 못해 **배포 자체가 실패한다.**
+    #
+    # 🔴 **REPLACE_ME 가 latest 로 남는 함정**(§modules/secrets/variables.tf):
+    # 실제 키를 올린 뒤에도 placeholder = true 로 두면 Terraform 이 이 버전을 계속
+    # 소유한다. 어떤 이유로든 재생성되는 순간 REPLACE_ME 가 다시 latest 가 되고,
+    # 그 시점부터 모든 분석 요청이 공급자에서 401 로 떨어진다. WAS 는 기동하고
+    # 헬스체크도 통과하므로 알람이 울리지 않는다 — 통화만 조용히 분석되지 않는다.
+    #
+    # 그래서 실제 키를 올린 직후 반드시 두 가지를 한다:
+    #   1) gcloud secrets versions add CALL_AI_API_KEY --project=redhead-kr --data-file=-
+    #   2) 아래를 placeholder = false 로 바꾸고 state 에서도 뺀다:
+    #      terraform state rm 'module.secrets.google_secret_manager_secret_version.manual["CALL_AI_API_KEY"]'
+    #   3) Cloud Run 리비전을 새로 띄운다. version = "latest" 여도 **이미 뜬 인스턴스는
+    #      기동 시점의 값을 들고 있다**(위 키 교체 절차와 같은 이유).
+    #
+    # ⚠️ 싱가포르 리전 키다. 중국 본토 엔드포인트(dashscope.aliyuncs.com)와는 키가
+    # 호환되지 않는다 — 엔드포인트는 §variables.tf 의 call_ai.base_url 이 정한다.
+    # 2026-09-18 실제 키를 버전 2로 올렸다. placeholder = false 로 내려 Terraform 이
+    # 이 시크릿의 **버전을 소유하지 않게** 했다(위 함정 설명 참고). 키를 갈 때는
+    # `gcloud secrets versions add` 로 새 버전을 올리고 Cloud Run 리비전을 새로 띄운다.
+    CALL_AI_API_KEY = {
+      manual      = true
+      placeholder = false
+    }
   }
 
   # 🔴 시크릿 단위로만 준다. 프로젝트 레벨 secretAccessor 는 과도하고, 우산 프로젝트에서는
@@ -70,6 +102,11 @@ module "secrets" {
   #
   # 🔴 jayeon-app 런타임에는 주지 않는다. 정적 파일을 내주는 nginx 컨테이너가 서명키를 읽을
   # 이유가 없다. accessor_members 는 이 모듈의 **모든** 시크릿에 한꺼번에 걸리므로, 여기에
-  # 계정을 하나 더 넣는 것은 두 서명키를 동시에 여는 일이다.
+  # 계정을 하나 더 넣는 것은 세 시크릿을 동시에 여는 일이다.
+  #
+  # CALL_AI_API_KEY 를 이 모듈 호출에 함께 둔 이유 — 읽는 주체가 jayeon-was-run 하나로
+  # 같기 때문이다. 모듈의 경고("주체가 다르면 모듈 호출을 나눠라")에 걸리지 않는다.
+  # ⚠️ 통화분석을 다른 서비스로 떼어내는 날에는 이 시크릿만 별도 module.secrets 호출로
+  # 옮겨야 한다. 그 서비스를 여기 accessor_members 에 더하면 JWT 서명키까지 같이 열린다.
   accessor_members = [module.was_service_account.member]
 }

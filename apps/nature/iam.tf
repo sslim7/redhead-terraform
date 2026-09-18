@@ -25,7 +25,7 @@ module "app_service_account" {
 
 # jayeon-was(Go 백엔드) 런타임.
 #
-# Firestore 하나만 쓴다. Cloud SQL 도, Cloud Storage 도 아직 없다.
+# Firestore 와 통화 녹음 버킷을 쓴다. Cloud SQL 은 없다.
 # 자격증명은 ADC 만 쓴다 — 키 파일을 만들지 않으므로 이 SA 로 도는 것이 곧 인증이다.
 module "was_service_account" {
   source = "../../modules/service-account"
@@ -33,7 +33,7 @@ module "was_service_account" {
   project_id   = var.project_id
   account_id   = "jayeon-was-run"
   display_name = "Nature WAS Cloud Run runtime"
-  description  = "Go 백엔드 런타임. Firestore(Native) 와 자기 시크릿만 읽는다"
+  description  = "Go 백엔드 런타임. Firestore(Native)·통화 녹음 버킷·자기 시크릿만 읽고 쓴다"
 
   project_roles = [
     # Firestore 문서 읽기·쓰기. 없으면 모든 데이터 API 가 PERMISSION_DENIED 로 떨어진다.
@@ -42,7 +42,33 @@ module "was_service_account" {
     "roles/datastore.user",
   ]
 
+  # ── 🔴 서명 URL 발급에 필요한 권한 ────────────────────────────────────────
+  #
+  # 앱은 녹음 파일을 **서버를 거치지 않고** GCS 로 직접 올린다(§call-audio.tf). 그러려면
+  # WAS 가 V4 서명 URL(또는 resumable 세션 URL)을 만들어 줘야 하는데, 서명에는 개인키가
+  # 필요하다. **Cloud Run 의 ADC 에는 개인키가 없다** — 메타데이터 서버가 주는 것은
+  # 액세스 토큰뿐이다. 그래서 라이브러리가 IAM Credentials 의 `signBlob` API 로 서명을
+  # 대신 받아 오고, GCP 는 그 호출을 "이 서비스 계정을 가장하는 행위" 로 취급한다.
+  #
+  # 가장의 대상이 **자기 자신**이어도 예외가 아니다. 그래서 이 SA 에 대해
+  # roles/iam.serviceAccountTokenCreator 가 필요하다(표준 GCP 동작).
+  #
+  # 없으면 실패 모양이 헷갈린다 — 업로드가 아니라 **URL 을 만드는 단계**에서
+  # "Permission 'iam.serviceAccounts.signBlob' denied" 가 나고, 버킷 IAM 은 멀쩡하므로
+  # 스토리지 권한을 의심하며 시간을 버린다. 로컬 개발에서는 사용자 ADC 가 다른 경로를
+  # 타서 재현되지 않고, 운영에서만 깨진다.
+  #
+  # 🔴 프로젝트 레벨로 주지 마라. 프로젝트 레벨 serviceAccountTokenCreator 는 **프로젝트의
+  # 모든 SA** 를 가장할 수 있게 한다 — 우산 프로젝트에서는 배포자 SA(jayeon-deployer)와
+  # 다른 앱의 런타임 SA 까지 포함된다. 모듈의 이 플래그는 이 계정 스코프로만 붙인다
+  # (§modules/service-account/main.tf 의 self_token_creator).
+  #
+  # ⚠️ iamcredentials.googleapis.com 이 켜져 있어야 한다. shared/ 의 project-services 가
+  # 소유한다 — 그래서 shared 를 먼저 apply 해야 한다.
+  self_token_creator = true
+
   # 시크릿 접근은 프로젝트 레벨이 아니라 시크릿 단위로 붙는다(§secrets.tf 의 accessor_members).
+  # 통화 녹음 버킷 권한도 프로젝트 레벨이 아니라 버킷 단위로 붙는다(§call-audio.tf).
 }
 
 # ── 배포자 ──────────────────────────────────────────────────────────────────
