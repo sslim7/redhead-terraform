@@ -21,3 +21,23 @@ output "url" {
   description = "커스텀 도메인 주소. 인증서 발급과 makes 쪽 deploy 가 끝나야 콘텐츠가 뜬다"
   value       = "https://${var.domain}"
 }
+
+# Firebase JS SDK 의 initializeApp() 에 그대로 넣는 값.
+# 🔴 비밀이 아니다 — 브라우저 번들에 실려 누구나 본다. 접근 통제는 Firestore 규칙
+# (firestore.rules.tftpl)과 Auth 가 한다. 그래서 sensitive 로 두지 않는다.
+output "firebase_web_config" {
+  description = "Firebase 웹 앱 공개 설정(apiKey · authDomain · projectId · appId · storageBucket · messagingSenderId)"
+  value = {
+    apiKey            = data.google_firebase_web_app_config.makes.api_key
+    authDomain        = data.google_firebase_web_app_config.makes.auth_domain
+    projectId         = var.project_id
+    appId             = google_firebase_web_app.makes.app_id
+    storageBucket     = data.google_firebase_web_app_config.makes.storage_bucket
+    messagingSenderId = data.google_firebase_web_app_config.makes.messaging_sender_id
+  }
+}
+
+output "firestore_database_id" {
+  description = "덱 편집본 Firestore 데이터베이스 이름. SDK 의 getFirestore(app, \"<이 값>\") 에 넣는다"
+  value       = module.firestore.database_name
+}

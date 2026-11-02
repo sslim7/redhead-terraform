@@ -51,3 +51,30 @@ variable "site_id" {
   type        = string
   default     = "redhead-makes"
 }
+
+# 덱 편집본 Firestore. 사용처는 firestore.tf.
+variable "firestore" {
+  description = "덱 편집본 Firestore 데이터베이스 설정. database_id · location_id 는 생성 후 변경 불가"
+  type = object({
+    database_id             = string
+    location_id             = string
+    delete_protection_state = optional(string, "DELETE_PROTECTION_ENABLED")
+    deletion_policy         = optional(string, "ABANDON")
+  })
+
+  validation {
+    condition     = var.firestore.database_id != "(default)"
+    error_message = "(default) 는 nature 소유다. makes 는 named 데이터베이스를 쓴다."
+  }
+}
+
+# 🔴 규칙의 쓰기 허용 목록이다. 여기 없는 계정은 로그인해도 쓸 수 없다.
+variable "editors" {
+  description = "덱 편집본을 쓸 수 있는 이메일 목록(Firestore 규칙의 request.auth.token.email 비교 대상)"
+  type        = list(string)
+
+  validation {
+    condition     = length(var.editors) > 0 && alltrue([for e in var.editors : can(regex("^[^@\\s]+@[^@\\s]+$", e))])
+    error_message = "editors 는 비어 있지 않은 이메일 목록이어야 한다."
+  }
+}

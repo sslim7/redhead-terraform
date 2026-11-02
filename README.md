@@ -10,7 +10,7 @@
 |---|---|---|
 | `shared/` | 프로젝트, API, state 버킷, Firebase 등록, DNS 존, 메일(PurelyMail) DNS, Artifact Registry | `shared` |
 | `apps/nature/` | Cloud Run, 서비스 계정·권한, 시크릿, Firestore·인덱스·규칙, Hosting 사이트·커스텀 도메인, 앱 DNS, Cloud Build 트리거, 통화 녹음 버킷, 통화분석 tick(Cloud Scheduler) | `apps/jayeon` |
-| `apps/makes/` | Hosting 사이트 `redhead-makes`, 커스텀 도메인 `makes.redhead.kr`, CNAME | `apps/makes` |
+| `apps/makes/` | Hosting 사이트 `redhead-makes`, 커스텀 도메인 `makes.redhead.kr`, CNAME, Firestore DB `makes` + 규칙, Firebase 웹 앱 | `apps/makes` |
 | `modules/` | 재사용 Terraform 모듈 | — |
 | `hosting/`, `scripts/hosting-release.sh` | Hosting rewrite 설정과 릴리스 (Terraform 밖) | — |
 
@@ -31,7 +31,7 @@
 | 배포 | 태그 트리거로 실제 이미지 배포됨 — app `v0.1.2`, was `v0.1.0` |
 | 도메인 | `https://nature.redhead.kr` 200, `https://nature-api.redhead.kr/health` 200(`ok`). 구 `jayeon.redhead.kr`, `jayeon-api.redhead.kr`도 호환용으로 유지 |
 | 기본 VPC | Compute API 미사용 상태라 기본 VPC 없음 (`auto_create_network = true`는 영향 없음) |
-| makes (2026-11-02) | `apps/makes` apply 완료(사이트 `redhead-makes`, 커스텀 도메인 `makes.redhead.kr`, CNAME). 콘텐츠는 makes 저장소 `npm run deploy` |
+| makes (2026-11-02) | `apps/makes` apply 완료(사이트 `redhead-makes`, 커스텀 도메인 `makes.redhead.kr`, CNAME; Firestore DB `makes` + 규칙 release `cloud.firestore/makes`, 웹 앱 `makes`). 콘텐츠는 makes 저장소 `npm run deploy`. 구글 로그인 공급자는 콘솔에서 켠다 |
 
 남은 작업:
 
@@ -146,6 +146,10 @@ scripts/hosting-release.sh redhead-jayeon-api
 
 `redhead-makes`는 정적 사이트라 rewrite 릴리스가 없다.
 콘텐츠는 makes 저장소의 `npm run deploy`가 올린다.
+
+로그인 공급자(구글)는 Firebase 콘솔 → Authentication → Sign-in method에서 사람이 켠다.
+테라폼은 Identity Platform config를 만들지 않는다(OAuth 클라이언트를 테라폼이 못 만든다).
+Authorized domains에 `redhead-makes.web.app`, `makes.redhead.kr`을 더한다.
 
 ## 작업 절차
 

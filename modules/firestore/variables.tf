@@ -3,6 +3,12 @@ variable "project_id" {
   type        = string
 }
 
+variable "database_id" {
+  description = "Firestore 데이터베이스 ID. 기본 \"(default)\". 다른 값이면 named 데이터베이스(무료 쿼터 없음)를 만든다. 생성 후 변경 불가"
+  type        = string
+  default     = "(default)"
+}
+
 variable "location_id" {
   description = "Firestore 데이터베이스 위치 (리전 또는 멀티리전). 생성 후 변경 불가"
   type        = string
@@ -101,7 +107,18 @@ variable "single_field_indexes" {
 }
 
 variable "rules_file" {
-  description = "Firestore 보안 규칙 파일 경로. null 이면 규칙을 Terraform 이 관리하지 않는다"
+  description = "Firestore 보안 규칙 파일 경로. rules_content 와 함께 null 이면 규칙을 Terraform 이 관리하지 않는다"
   type        = string
   default     = null
+}
+
+variable "rules_content" {
+  description = "Firestore 보안 규칙 본문(문자열). templatefile 로 만든 규칙을 넘길 때 쓴다. rules_file 과 동시에 줄 수 없다"
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.rules_content == null || var.rules_file == null
+    error_message = "rules_file 과 rules_content 는 둘 중 하나만 지정한다."
+  }
 }

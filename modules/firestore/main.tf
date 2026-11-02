@@ -7,19 +7,33 @@
 # 그래서 여기는 "API 는 이미 켜져 있다" 를 전제로만 동작한다 — 전제를 보장하는 것은
 # apply 순서(shared 먼저)뿐이고 Terraform 은 이걸 강제하지 못한다.
 
-# (default) 데이터베이스만 만든다.
+# 기본은 (default) 데이터베이스다. database_id 를 주면 이름 있는(named) 데이터베이스를 만든다.
 # Firestore 무료 쿼터(저장 1GiB, 일일 읽기 50,000 / 쓰기 20,000 / 삭제 20,000)는
 # 프로젝트당 (default) 데이터베이스 하나에만 적용된다.
-# 이름 있는(named) 추가 데이터베이스는 무료 쿼터가 없고 전액 과금되므로 만들지 않는다.
+# named 데이터베이스는 무료 쿼터가 없고 전액 과금된다 — 쓰는 앱이 그 비용을 알고 고른다
+# (apps/makes/firestore.tf).
+#
+# ⚠️ 리소스 주소는 database_id 와 무관하게 `google_firestore_database.default` 로 둔다.
+# 이 이름을 바꾸면 기존 호출부(apps/nature)의 state 주소가 바뀌어 DB 교체 plan 이 나온다.
 #
 # 🔴 redhead 는 **우산 프로젝트**다. `redhead.kr` 아래로 앱이 계속 늘어나는데 (default)
 # 데이터베이스는 프로젝트에 하나뿐이고, 지금 그것을 jayeon 이 가져갔다. 다음 앱이 Firestore 를
 # 쓰려면 named 데이터베이스(전액 과금)를 만들거나 별도 프로젝트로 가야 한다. 두 번째 앱이
 # 이 모듈을 그대로 복사해 호출하면 같은 (default) 를 두 state 가 주장하게 되고, 먼저 만든
 # 쪽이 이긴 채로 나중 apply 가 alreadyExists 로 깨진다 — **Terraform 이 막아 주지 않는다.**
+locals {
+  manage_rules = var.rules_file != null || var.rules_content != null
+
+  rules_release_name = (
+    var.database_id == "(default)"
+    ? "cloud.firestore"
+    : "cloud.firestore/${var.database_id}"
+  )
+}
+
 resource "google_firestore_database" "default" {
   project = var.project_id
-  name    = "(default)"
+  name    = var.database_id
 
   # 🔴 생성 후 변경 불가. 바꾸려면 데이터베이스를 지우고 다시 만들어야 하고, 그것은
   # 데이터를 버리는 일이다. Cloud Run 과 같은 리전에 둔다.
@@ -126,7 +140,7 @@ resource "google_firestore_field" "single" {
 # create_before_destroy 를 걸어야 release 가 옮겨 간 뒤에 옛 ruleset 이 지워진다.
 # 반대 순서면 release 가 사라진 ruleset 을 가리키는 순간이 생긴다.
 resource "google_firebaserules_ruleset" "firestore" {
-  count    = var.rules_file != null ? 1 : 0
+  count    = local.manage_rules ? 1 : 0
   provider = google-beta
 
   project = var.project_id
@@ -134,7 +148,7 @@ resource "google_firebaserules_ruleset" "firestore" {
   source {
     files {
       name    = "firestore.rules"
-      content = file(var.rules_file)
+      content = var.rules_content != null ? var.rules_content : file(var.rules_file)
     }
   }
 
@@ -146,13 +160,14 @@ resource "google_firebaserules_ruleset" "firestore" {
 }
 
 # "cloud.firestore" 는 (default) 데이터베이스의 활성 규칙을 가리키는 고정 릴리스 이름이다.
-# firebase CLI 의 `deploy --only firestore:rules` 도 같은 이름을 덮어쓴다.
+# named 데이터베이스는 "cloud.firestore/<database_id>" 다 — firebase CLI(rulesDeploy.ts)가
+# 쓰는 명명과 같다. firebase CLI 의 `deploy --only firestore:rules` 도 같은 이름을 덮어쓴다.
 # 두 경로로 배포하면 서로를 되돌리므로 배포 주체를 Terraform 하나로 고정한다.
 resource "google_firebaserules_release" "firestore" {
-  count    = var.rules_file != null ? 1 : 0
+  count    = local.manage_rules ? 1 : 0
   provider = google-beta
 
   project      = var.project_id
-  name         = "cloud.firestore"
+  name         = local.rules_release_name
   ruleset_name = "projects/${var.project_id}/rulesets/${google_firebaserules_ruleset.firestore[0].name}"
 }
