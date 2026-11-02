@@ -10,6 +10,7 @@
 |---|---|---|
 | `shared/` | 프로젝트, API, state 버킷, Firebase 등록, DNS 존, 메일(PurelyMail) DNS, Artifact Registry | `shared` |
 | `apps/nature/` | Cloud Run, 서비스 계정·권한, 시크릿, Firestore·인덱스·규칙, Hosting 사이트·커스텀 도메인, 앱 DNS, Cloud Build 트리거, 통화 녹음 버킷, 통화분석 tick(Cloud Scheduler) | `apps/jayeon` |
+| `apps/makes/` | Hosting 사이트 `redhead-makes`, 커스텀 도메인 `makes.redhead.kr`, CNAME | `apps/makes` |
 | `modules/` | 재사용 Terraform 모듈 | — |
 | `hosting/`, `scripts/hosting-release.sh` | Hosting rewrite 설정과 릴리스 (Terraform 밖) | — |
 
@@ -30,6 +31,7 @@
 | 배포 | 태그 트리거로 실제 이미지 배포됨 — app `v0.1.2`, was `v0.1.0` |
 | 도메인 | `https://nature.redhead.kr` 200, `https://nature-api.redhead.kr/health` 200(`ok`). 구 `jayeon.redhead.kr`, `jayeon-api.redhead.kr`도 호환용으로 유지 |
 | 기본 VPC | Compute API 미사용 상태라 기본 VPC 없음 (`auto_create_network = true`는 영향 없음) |
+| makes (2026-11-02) | `apps/makes` apply 완료(사이트 `redhead-makes`, 커스텀 도메인 `makes.redhead.kr`, CNAME). 콘텐츠는 makes 저장소 `npm run deploy` |
 
 남은 작업:
 
@@ -142,6 +144,9 @@ scripts/hosting-release.sh redhead-jayeon-api
 참고: [Cloud Run 연동 지원 리전](https://firebase.google.com/docs/hosting/cloud-run),
 [커스텀 도메인 소유권 상태](https://firebase.google.com/docs/reference/hosting/rest/v1beta1/projects.sites.customDomains#ownershipstate).
 
+`redhead-makes`는 정적 사이트라 rewrite 릴리스가 없다.
+콘텐츠는 makes 저장소의 `npm run deploy`가 올린다.
+
 ## 작업 절차
 
 plan·apply는 사용자가 로컬에서 직접 검토하고 실행한다. 삭제·교체가 plan에 보이면 진행하지 않는다.
@@ -159,6 +164,7 @@ terraform apply
 terraform fmt -check -recursive
 terraform -chdir=shared init -backend=false && terraform -chdir=shared validate
 terraform -chdir=apps/nature init -backend=false && terraform -chdir=apps/nature validate
+terraform -chdir=apps/makes init -backend=false && terraform -chdir=apps/makes validate
 bash -n scripts/hosting-release.sh
 ```
 
